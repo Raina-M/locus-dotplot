@@ -15,11 +15,19 @@ export function parseFasta(text) {
     }
   }
   if (!sequences.length) throw Error('No FASTA records found.');
-  return sequences.map(({name,chunks}) => {const seq=chunks.join(''); if (!seq.length) throw Error(`Empty sequence: ${name}`); return {name,seq};});
+  return sequences.map(({name,chunks}) => {
+    const seq=chunks.join(''); if (!seq.length) throw Error(`Empty sequence: ${name}`);
+    const region=name.match(/^(.+):(\d+)-(\d+)$/);
+    if(region){const start=Number(region[2]),end=Number(region[3]);
+      if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<1||end-start+1!==seq.length)throw Error(`FASTA region header ${name} does not match its sequence length. Region headers use one-based inclusive coordinates.`);
+      return {name,seq,referenceName:region[1],origin:start-1};
+    }
+    return {name,seq};
+  });
 }
 export function parseTrack(text, filename) {
   const gff = /\.(gff3?|gtf)$/i.test(filename), signal = /\.(bedgraph|bg)$/i.test(filename);
-  const features=[]; let lineNumber=0;
+  const features=[]; let lineNumber=0,bed4Strands=0;
   for (const line of text.split(/\r?\n/)) {
     lineNumber++;
     if (line === '##FASTA') break;
@@ -33,8 +41,13 @@ export function parseTrack(text, filename) {
     if(signal && (c.length<4||!Number.isFinite(value))) fail('bedGraph needs a numeric fourth column');
     const attrs=gff?line.split('\t').slice(8).join('\t') || c.slice(8).join(' '):'';
     const attribute=key=>{const m=attrs.match(new RegExp('(?:^|;)[ ]*'+key+'(?:=| +)"?([^;"\\n]+)')); if(!m)return null;try{return decodeURIComponent(m[1]);}catch{return m[1];}};
-    const strand=c[gff?6:5];
-    const f={chr:c[0],start,end,name:gff?(attribute('Name')||attribute('gene_name')||attribute('ID')||c[2]):(c[3]||'Feature'),strand:['+','-'].includes(strand)?strand:'.',value,type:gff?c[2]:'interval',id:gff?attribute('ID'):null,parent:gff?(attribute('Parent')||attribute('transcript_id')):null,blocks:[]};
+    // Common nonstandard BED4 shorthand: chromosome, start, end, strand.
+    // Only recognize exactly four columns and an explicit +/- value; BED6
+    // continues to use column 6, and ordinary BED4 names stay names.
+    const bed4Strand=!gff&&!signal&&c.length===4&&['+','-'].includes(c[3]);
+    if(bed4Strand)bed4Strands++;
+    const strand=c[bed4Strand?3:gff?6:5];
+    const f={chr:c[0],start,end,name:gff?(attribute('Name')||attribute('gene_name')||attribute('ID')||c[2]):(bed4Strand?`Feature ${features.length+1}`:c[3]||'Feature'),strand:['+','-'].includes(strand)?strand:'.',value,type:gff?c[2]:'interval',id:gff?attribute('ID'):null,parent:gff?(attribute('Parent')||attribute('transcript_id')):null,blocks:[]};
     if(!gff&&!signal&&c.length>=12) {
       const count=Number(c[9]),sizes=c[10].split(',').filter(Boolean).map(Number),starts=c[11].split(',').filter(Boolean).map(Number);
       if(!Number.isInteger(count)||count<1||sizes.length!==count||starts.length!==count) fail('invalid BED12 block count');
@@ -48,7 +61,29 @@ export function parseTrack(text, filename) {
     for(const f of features) if(/^(exon|CDS)$/i.test(f.type)&&f.parent) for(const p of f.parent.split(',')) if(parents.has(p))parents.get(p).blocks.push({start:f.start,end:f.end});
     if(parents.size) return {name:filename,kind:'annotation',features:features.filter(f=>parents.has(f.id)||(!/^(gene|exon|CDS)$/i.test(f.type)&&!parents.has(f.parent)))};
   }
-  return {name:filename,kind:signal?'signal':'annotation',features};
+  return {name:filename,kind:signal?'signal':'annotation',features,...(bed4Strands?{importNotes:[`${bed4Strands} BED4 records: column 4 interpreted as strand (+/-).`]}:{})};
+}
+// Sequence indices are always local, zero-based offsets. Source coordinates are
+// metadata, shared by locus labels and annotation projection, never worker input.
+export const sequenceOrigin = sequence => sequence.origin ?? 0;
+export const referenceName = sequence => sequence.referenceName ?? sequence.name;
+export function withSequenceCoordinates(sequence,name,start){
+  if(!name.trim())throw Error('A source chromosome name is required.');
+  if(!Number.isSafeInteger(start)||start<1||!Number.isSafeInteger(start-1+sequence.seq.length))throw Error('Source start must be a positive, safe integer (one-based).');
+  return {...sequence,referenceName:name.trim(),origin:start-1};
+}
+export function projectTrackFeatures(track,sequence,region={start:0,end:sequence.seq.length}){
+  const origin=sequenceOrigin(sequence),name=referenceName(sequence);
+  return track.features.filter(f=>f.chr===name&&f.end>origin+region.start&&f.start<origin+region.end).map(f=>({...f,start:f.start-origin,end:f.end-origin,blocks:f.blocks?.map(b=>({start:b.start-origin,end:b.end-origin}))}));
+}
+export function trackCoverage(track,sequences){
+  let overlapping=0,outside=0,unmatched=0;
+  for(const f of track.features){const matching=sequences.filter(s=>referenceName(s)===f.chr);
+    if(!matching.length)unmatched++;
+    else if(matching.some(s=>f.end>sequenceOrigin(s)&&f.start<sequenceOrigin(s)+s.seq.length))overlapping++;
+    else outside++;
+  }
+  return {total:track.features.length,overlapping,outside,unmatched};
 }
 export function autoK(span) {return span>5000000?101:span>1000000?71:span>250000?41:span>50000?31:span>10000?21:span>2000?15:9;}
 export function clampRegion(region,length){const span=Math.min(length,Math.max(Math.min(40,length),Math.round(region.end-region.start)));const start=Math.max(0,Math.min(length-span,Math.round(region.start)));return {...region,start,end:start+span};}

@@ -1,4 +1,4 @@
-import {makeDemo,parseFasta,parseTrack,autoK,clampRegion} from './core.js';
+import {makeDemo,parseFasta,parseTrack,autoK,clampRegion,sequenceOrigin,referenceName,withSequenceCoordinates,projectTrackFeatures,trackCoverage} from './core.js';
 const $=id=>document.getElementById(id),fmt=n=>Math.round(n).toLocaleString('en-US');
 const bp=n=>n>=1e6?`${+(n/1e6).toFixed(2)} Mb`:n>=1000?`${+(n/1000).toFixed(1)} kb`:`${Math.round(n)} bp`;
 const colors=['#187f78','#b98b47','#648bbb','#a77aa3','#bb7575','#819b60'];
@@ -16,9 +16,28 @@ function setup(data,isDemo=true,label='Synthetic reference'){
 }
 function renderTrackList(){
   $('trackCount').textContent=String(tracks.length).padStart(2,'0');$('trackList').replaceChildren();
-  for(const t of tracks){const row=document.createElement('div');row.className='track-item';const check=document.createElement('input');check.type='checkbox';check.checked=t.visible;check.setAttribute('aria-label',`Show ${t.name}`);check.onchange=()=>{t.visible=check.checked;renderBase();};const swatch=document.createElement('span');swatch.className='swatch';swatch.style.background=t.color;const name=document.createElement('span');name.className='track-name';name.textContent=t.name;name.title=t.name;const kind=document.createElement('span');kind.className='track-kind';kind.textContent=t.kind==='signal'?'SIGNAL':'BED/GFF';const remove=document.createElement('button');remove.className='remove-track';remove.textContent='×';remove.setAttribute('aria-label',`Remove ${t.name}`);remove.onclick=()=>{tracks=tracks.filter(a=>a.id!==t.id);renderTrackList();renderBase();};row.append(check,swatch,name,kind,remove);$('trackList').append(row);}
+  const warnings=[];
+  for(const t of tracks){
+    const entry=document.createElement('div'),row=document.createElement('div');entry.className='track-entry';row.className='track-item';
+    const check=document.createElement('input');check.type='checkbox';check.checked=t.visible;check.setAttribute('aria-label',`Show ${t.name}`);check.onchange=()=>{t.visible=check.checked;renderBase();};
+    const swatch=document.createElement('span');swatch.className='swatch';swatch.style.background=t.color;
+    const name=document.createElement('span');name.className='track-name';name.textContent=t.name;name.title=t.name;
+    const kind=document.createElement('span');kind.className='track-kind';kind.textContent=t.kind==='signal'?'SIGNAL':'BED/GFF';
+    const remove=document.createElement('button');remove.className='remove-track';remove.textContent='×';remove.setAttribute('aria-label',`Remove ${t.name}`);remove.onclick=()=>{tracks=tracks.filter(a=>a.id!==t.id);renderTrackList();renderBase();};
+    row.append(check,swatch,name,kind,remove);entry.append(row);
+    const coverage=trackCoverage(t,sequences),summary=document.createElement('small');summary.className='track-coverage';
+    summary.textContent=`${fmt(coverage.overlapping)} / ${fmt(coverage.total)} overlap loaded sequence`;
+    if(coverage.outside||coverage.unmatched){
+      summary.classList.add('track-warning');const detail=[coverage.outside?`${fmt(coverage.outside)} outside loaded coordinates`:null,coverage.unmatched?`${fmt(coverage.unmatched)} with unmatched chromosome names`:null].filter(Boolean).join('; ');
+      summary.title=detail;warnings.push(`${t.name}: ${detail}.`);
+      const fix=document.createElement('button');fix.className='text-button track-fix';fix.textContent='Check sequence coordinates';fix.onclick=()=>openCoordinates(sequences.findIndex(s=>t.features.some(f=>f.chr===referenceName(s)))) ;entry.append(summary,fix);
+    }else entry.append(summary);
+    for(const note of t.importNotes||[]){const n=document.createElement('small');n.className='track-import-note';n.textContent=note;entry.append(n);}
+    $('trackList').append(entry);
+  }
+  $('trackWarning').hidden=!warnings.length;$('trackWarningText').textContent=warnings.join(' ')+' Extracted FASTA files need their source chromosome and one-based start set explicitly.';
 }
-const regionText=r=>`${fmt(r.start+1)}–${fmt(r.end)}`;
+const regionText=r=>`${fmt(sequenceOrigin(sequences[r.chr])+r.start+1)}–${fmt(sequenceOrigin(sequences[r.chr])+r.end)}`;
 function updateLinked(){$('linkAxes').classList.toggle('linked',linked);$('linkAxes').setAttribute('aria-pressed',String(linked));$('linkAxes').querySelector('small').textContent=linked?'LINKED':'FREE';}
 function navigate(){
   x=clampRegion(x,sequences[x.chr].seq.length);y=clampRegion(y,sequences[y.chr].seq.length);
@@ -45,11 +64,11 @@ function navigate(){
 function finish(r){$('computing').hidden=true;$('exportButton').disabled=false;$('matchesStat').textContent=fmt(r.points.length/3);$('timeStat').textContent=`${Math.round(r.ms)} ms`;$('samplingStat').textContent=r.w===1?'All k-mer positions':`${r.w} positions`;
   $('filterNote').textContent=`${fmt(r.filtered)} repetitive Y seeds omitted.${r.limited?' Pair cap reached; matches are truncated.':' Sampled exact matches; not an alignment or exhaustive repeat census.'}`;
   $('status').textContent=`${demo?'Synthetic example':'Local genome'} · ${fmt(r.points.length/3)} verified seed pairs${r.limited?' · PAIR CAP REACHED':''}`;renderBase();}
-function readRegion(axis){try{const value=$(axis+'Region').value.trim().replaceAll(',','');const m=value.match(/^(\d+)\s*[-–:]\s*(\d+)$/);if(!m)throw Error('Enter a region as start–end, for example 1–100,000.');const start=Number(m[1])-1,end=Number(m[2]);let r=axis==='x'?x:y;if(start<0||end<=start||end>sequences[r.chr].seq.length)throw Error(`Region must be within 1–${fmt(sequences[r.chr].seq.length)}.`);r={...r,start,end};if(axis==='x')x=r;else y=r;if(linked){if(axis==='x')y={...r};else x={...r};}navigate();}catch(e){toast(e.message);}}
+function readRegion(axis){try{const value=$(axis+'Region').value.trim().replaceAll(',','');const m=value.match(/^(\d+)\s*[-–:]\s*(\d+)$/);if(!m)throw Error('Enter a region as start–end, for example 1–100,000.');let r=axis==='x'?x:y;const origin=sequenceOrigin(sequences[r.chr]),start=Number(m[1])-1-origin,end=Number(m[2])-origin;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<=start||end>sequences[r.chr].seq.length)throw Error(`Region must be within ${fmt(origin+1)}–${fmt(origin+sequences[r.chr].seq.length)}.`);r={...r,start,end};if(axis==='x')x=r;else y=r;if(linked){if(axis==='x')y={...r};else x={...r};}navigate();}catch(e){toast(e.message);}}
 function transformRegion(r,factor,anchor=.5){const span=r.end-r.start,newSpan=span*factor,position=r.start+span*anchor;return clampRegion({...r,start:position-newSpan*anchor,end:position+newSpan*(1-anchor)},sequences[r.chr].seq.length);}
 function zoom(factor,ax=.5,ay=.5){x=transformRegion(x,factor,ax);y=linked?{...x}:transformRegion(y,factor,ay);navigate();}
 function pan(dx,dy=dx){const shift=(r,d)=>clampRegion({...r,start:r.start+d,end:r.end+d},sequences[r.chr].seq.length);x=shift(x,dx);y=linked?{...x}:shift(y,dy);navigate();}
-function ticks(r){const span=r.end-r.start,raw=span/5,power=10**Math.floor(Math.log10(raw)),v=raw/power,step=(v<=1?1:v<=2?2:v<=5?5:10)*power;const out=[];for(let p=Math.ceil(r.start/step)*step;p<=r.end;p+=step)out.push(p);return out;}
+function ticks(r){const span=r.end-r.start,raw=span/5,power=10**Math.floor(Math.log10(raw)),v=raw/power,step=(v<=1?1:v<=2?2:v<=5?5:10)*power,origin=sequenceOrigin(sequences[r.chr]);const out=[];for(let p=Math.ceil((origin+r.start)/step)*step;p<=origin+r.end;p+=step)out.push(p-origin);return out;}
 function scale(v,r){return (v-r.start)/(r.end-r.start);}
 function renderBase(){
   if(!x)return;const width=$('plotContainer').clientWidth,dpr=Math.min(window.devicePixelRatio||1,2),visible=tracks.filter(t=>t.visible),row=23,left=visible.length?Math.max(91,94+visible.length*16):60,top=visible.length?24+visible.length*row:34,size=Math.max(130,Math.min(width-left-30,580)),height=top+size+49;
@@ -63,8 +82,8 @@ function renderBase(){
     const xx=left-33-(visible.length-1-i)*16;drawTrack(c,t,y,xx,top,12,size,true);
   });
   c.font='8px ui-monospace,monospace';c.lineWidth=1;
-  for(const p of ticks(x)){const px=left+scale(p,x)*size;c.strokeStyle='#edf1eb';c.beginPath();c.moveTo(px,top);c.lineTo(px,top+size);c.stroke();c.fillStyle='#97a49a';c.textAlign='center';c.fillText(bp(p),px,top-10);}
-  for(const p of ticks(y)){const py=top+scale(p,y)*size;c.strokeStyle='#edf1eb';c.beginPath();c.moveTo(left,py);c.lineTo(left+size,py);c.stroke();c.fillStyle='#97a49a';c.textAlign='right';c.fillText(bp(p),width>420?left-36-visible.length*16:Math.max(20,left-36-visible.length*16),py);}
+  for(const p of ticks(x)){const px=left+scale(p,x)*size;c.strokeStyle='#edf1eb';c.beginPath();c.moveTo(px,top);c.lineTo(px,top+size);c.stroke();c.fillStyle='#97a49a';c.textAlign='center';c.fillText(bp(p+sequenceOrigin(sequences[x.chr])),px,top-10);}
+  for(const p of ticks(y)){const py=top+scale(p,y)*size;c.strokeStyle='#edf1eb';c.beginPath();c.moveTo(left,py);c.lineTo(left+size,py);c.stroke();c.fillStyle='#97a49a';c.textAlign='right';c.fillText(bp(p+sequenceOrigin(sequences[y.chr])),width>420?left-36-visible.length*16:Math.max(20,left-36-visible.length*16),py);}
   c.strokeStyle='#dae4d8';c.strokeRect(left+.5,top+.5,size,size);
   if(result){c.save();c.beginPath();c.rect(left,top,size,size);c.clip();const pts=result.points;
     for(const strand of [1,-1]){if(!$(strand===1?'showForward':'showReverse').checked)continue;c.fillStyle=strand===1?'#177e768c':'#cd8b62a0';c.strokeStyle=strand===1?'#177e768c':'#cd8b62a0';c.lineWidth=1;
@@ -73,12 +92,12 @@ function renderBase(){
         if(kx>1.5||ky>1.5){c.moveTo(px,py+(strand<0?ky:0));c.lineTo(px+Math.max(.7,kx),py+(strand>0?ky:0));}else c.rect(px,py,1,1);
       }if(kx>1.5||ky>1.5)c.stroke();else c.fill();
     }c.restore();}
-  c.textAlign='center';c.fillStyle='#6f8878';c.font='9px "DM Sans",system-ui';c.fillText(`${sequences[x.chr].label||sequences[x.chr].name}  ·  X`,left+size/2,top+size+29);
-  c.save();c.translate(13,top+size/2);c.rotate(-Math.PI/2);c.fillText(`${sequences[y.chr].label||sequences[y.chr].name}  ·  Y`,0,0);c.restore();
+  c.textAlign='center';c.fillStyle='#6f8878';c.font='9px "DM Sans",system-ui';c.fillText(`${referenceName(sequences[x.chr])}  ·  X`,left+size/2,top+size+29);
+  c.save();c.translate(13,top+size/2);c.rotate(-Math.PI/2);c.fillText(`${referenceName(sequences[y.chr])}  ·  Y`,0,0);c.restore();
   $('resolutionStat').textContent=`${bp((x.end-x.start)/size)}/px`;
   drawOverlay();
 }
-function matchingFeatures(t,r){return t.features.filter(f=>f.chr===sequences[r.chr].name&&f.end>r.start&&f.start<r.end);}
+function matchingFeatures(t,r){return projectTrackFeatures(t,sequences[r.chr],r);}
 function drawTrack(c,t,r,px,py,w,h,vertical){
   c.save();c.beginPath();c.rect(px,py,w,h);c.clip();c.fillStyle='#f5f7f2';c.fillRect(px,py,w,h);
   const length=vertical?h:w,features=matchingFeatures(t,r),toPos=v=>scale(v,r)*length;
@@ -111,12 +130,12 @@ function inside(p){const {left,top,size}=geometry;return p.x>=left&&p.x<=left+si
 function clipPoint(p){const {left,top,size}=geometry;return {x:Math.max(left,Math.min(left+size,p.x)),y:Math.max(top,Math.min(top+size,p.y))};}
 function showHover(p){
   const {left,top,size,visible,row,width}=geometry;const tool=$('tooltip');let text='';
-  if(inside(p)){text=`X  ${sequences[x.chr].name}:${fmt(x.start+(p.x-left)/size*(x.end-x.start)+1)}\nY  ${sequences[y.chr].name}:${fmt(y.start+(p.y-top)/size*(y.end-y.start)+1)}`;}
+  if(inside(p)){text=`X  ${referenceName(sequences[x.chr])}:${fmt(sequenceOrigin(sequences[x.chr])+x.start+(p.x-left)/size*(x.end-x.start)+1)}\nY  ${referenceName(sequences[y.chr])}:${fmt(sequenceOrigin(sequences[y.chr])+y.start+(p.y-top)/size*(y.end-y.start)+1)}`;}
   else{
     let index=-1,r,pos;
     if(p.x>=left&&p.x<=left+size&&p.y<top-14){index=Math.round((p.y-12)/row);r=x;pos=x.start+(p.x-left)/size*(x.end-x.start);}
     else if(p.y>=top&&p.y<=top+size&&p.x<left-20){index=visible.length-1-Math.round((left-27-p.x)/16);r=y;pos=y.start+(p.y-top)/size*(y.end-y.start);}
-    const t=visible[index];if(t&&r){const features=matchingFeatures(t,r).filter(f=>f.start<=pos&&f.end>pos);text=`${t.name}\n${sequences[r.chr].name}:${fmt(pos+1)}`;if(features.length){text+='\n'+features.slice(0,4).map(f=>`${t.kind==='signal'?`Value: ${+f.value.toPrecision(5)}`:f.name} · ${fmt(f.start+1)}–${fmt(f.end)}${f.strand&&f.strand!=='.'?` (${f.strand})`:''}`).join('\n');}else text+='\nNo feature at this position';}
+    const t=visible[index];if(t&&r){const features=matchingFeatures(t,r).filter(f=>f.start<=pos&&f.end>pos),origin=sequenceOrigin(sequences[r.chr]);text=`${t.name}\n${referenceName(sequences[r.chr])}:${fmt(origin+pos+1)}`;if(features.length){text+='\n'+features.slice(0,4).map(f=>`${t.kind==='signal'?`Value: ${+f.value.toPrecision(5)}`:f.name} · ${fmt(origin+f.start+1)}–${fmt(origin+f.end)}${f.strand&&f.strand!=='.'?` (${f.strand})`:''}`).join('\n');}else text+='\nNo feature at this position';}
   }
   tool.hidden=!text;if(text){tool.textContent=text;tool.style.left=`${Math.max(4,Math.min(width-225,p.x+14))}px`;tool.style.top=`${Math.max(4,Math.min(geometry.height-95,p.y+14))}px`;}
 }
@@ -139,24 +158,37 @@ for(const axis of ['x','y']){$('go'+axis.toUpperCase()).onclick=()=>readRegion(a
 $('kSlider').oninput=e=>{k=Number(e.target.value);$('autoK').checked=false;navigate();};$('autoK').onchange=navigate;$('repeatFilter').onchange=navigate;
 for(const id of ['showForward','showReverse','showStrand'])$(id).onchange=renderBase;
 function openGuide(){$('guide').showModal();}for(const id of ['guideButton','helpButton'])$(id).onclick=openGuide;$('closeGuide').onclick=()=>$('guide').close();$('guide').onclick=e=>{if(e.target===$('guide')){const r=$('guide').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('guide').close();}};
+function populateCoordinates(){const s=sequences[Number($('coordinateSequence').value)];$('coordinateChromosome').value=referenceName(s);$('coordinateStart').value=fmt(sequenceOrigin(s)+1);$('coordinateLength').textContent=`${fmt(s.seq.length)} bp loaded. Enter the chromosome position of the first FASTA base, one-based.`;$('coordinateError').textContent='';}
+function openCoordinates(index=x.chr){
+  $('coordinateSequence').replaceChildren(...sequences.map((s,i)=>{const option=document.createElement('option');option.value=i;option.textContent=s.label||s.name;return option;}));
+  $('coordinateSequence').value=index>=0?index:x.chr;populateCoordinates();$('coordinatesDialog').showModal();
+}
+$('sequenceCoordinates').onclick=()=>openCoordinates();$('fixTrackCoordinates').onclick=()=>openCoordinates();$('mobileCoordinates').onclick=()=>openCoordinates();
+$('coordinateSequence').onchange=populateCoordinates;$('closeCoordinates').onclick=()=>$('coordinatesDialog').close();
+$('coordinatesForm').onsubmit=e=>{
+  e.preventDefault();try{const value=$('coordinateStart').value.trim().replaceAll(',','');if(!/^\d+$/.test(value))throw Error('Enter a one-based integer source start.');
+    const index=Number($('coordinateSequence').value);sequences[index]=withSequenceCoordinates(sequences[index],$('coordinateChromosome').value,Number(value));
+    $('coordinatesDialog').close();renderTrackList();navigate();toast('Sequence coordinates updated. Locus labels and tracks now use the source chromosome coordinates.');
+  }catch(error){$('coordinateError').textContent=error.message;}
+};
 $('workspaceTab').onclick=()=>canvas.focus();$('loadGenome').onclick=()=>$('genomeFile').click();$('addTrack').onclick=()=>$('trackFile').click();
 $('mobileGenome').onclick=()=>$('genomeFile').click();$('mobileTrack').onclick=()=>$('trackFile').click();$('mobileFit').onclick=()=>$('fitButton').click();
 $('genomeFile').onchange=async e=>{
   const files=[...e.target.files];if(!files.length)return;
   try{if(files.reduce((n,f)=>n+f.size,0)>20*1024**2)throw Error('This prototype accepts up to 20 MiB of uncompressed FASTA per workspace. Larger genomes need the indexed backend described in Methods.');
     const loaded=[];for(const file of files){for(const s of parseFasta(await file.text()))loaded.push({...s,label:files.length>1?`${file.name} / ${s.name}`:s.name});}
-    setup({sequences:loaded,tracks:[]},false,files.length===1?files[0].name:`${files.length} FASTA files`);toast(`Loaded ${loaded.length} sequences. Add tracks whose sequence names match the FASTA headers.`);
+    setup({sequences:loaded,tracks:[]},false,files.length===1?files[0].name:`${files.length} FASTA files`);toast(`Loaded ${loaded.length} sequences. For an extracted region, use Sequence coordinates to set its source start (or a chr:start-end FASTA header).`);
   }catch(error){toast(error.message);}finally{e.target.value='';}
 };
 $('trackFile').onchange=async e=>{
   const files=[...e.target.files];try{if(tracks.length+files.length>12)throw Error('Please keep at most 12 tracks in this prototype.');
-    const loaded=[];let unmatched=0;for(const file of files){if(file.size>10*1024**2)throw Error('Track files must be at most 10 MiB; use indexed formats for larger datasets.');const t=parseTrack(await file.text(),file.name);t.id=crypto.randomUUID();t.visible=true;t.color=colors[(tracks.length+loaded.length)%colors.length];const names=new Set(sequences.map(s=>s.name));unmatched+=t.features.filter(f=>!names.has(f.chr)).length;loaded.push(t);}
-    tracks.push(...loaded);renderTrackList();renderBase();toast(`Added ${loaded.length} track${loaded.length>1?'s':''}.${unmatched?` ${fmt(unmatched)} records have sequence names absent from this genome.`:''}`);
+    const loaded=[];for(const file of files){if(file.size>10*1024**2)throw Error('Track files must be at most 10 MiB; use indexed formats for larger datasets.');const t=parseTrack(await file.text(),file.name);t.id=crypto.randomUUID();t.visible=true;t.color=colors[(tracks.length+loaded.length)%colors.length];loaded.push(t);}
+    tracks.push(...loaded);renderTrackList();renderBase();const overlapping=loaded.reduce((n,t)=>n+trackCoverage(t,sequences).overlapping,0);toast(`Added ${loaded.length} track${loaded.length>1?'s':''}; ${fmt(overlapping)} features overlap the loaded sequence coordinates.${overlapping?'':' Check Sequence coordinates for an extracted FASTA.'}`);
   }catch(error){toast(error.message);}finally{e.target.value='';}
 };
 $('resetDemo').onclick=()=>setup(makeDemo());
 $('inversionButton').onclick=()=>{if(!demo)return;linked=false;updateLinked();x={chr:0,start:140000,end:220000};y={chr:0,start:385000,end:465000};navigate();};
-$('exportButton').onclick=()=>{hover=null;drawOverlay();const filename=`locus-${sequences[x.chr].name.replace(/[^\w.-]/g,'_')}-${x.start+1}-${x.end}-k${k}.png`;canvas.toBlob(blob=>{if(!blob){toast('PNG generation failed.');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.download=filename;a.href=url;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);},'image/png');};
-document.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)||$('guide').open)return;const d=(x.end-x.start)*.15;if(e.key==='+'||e.key==='='){e.preventDefault();zoom(.5);}if(e.key==='-'){e.preventDefault();zoom(2);}if(e.key==='ArrowLeft'){e.preventDefault();pan(-d);}if(e.key==='ArrowRight'){e.preventDefault();pan(d);}if(e.key==='ArrowUp'){e.preventDefault();pan(linked?-d:0,-(y.end-y.start)*.15);}if(e.key==='ArrowDown'){e.preventDefault();pan(linked?d:0,(y.end-y.start)*.15);}});
+$('exportButton').onclick=()=>{hover=null;drawOverlay();const origin=sequenceOrigin(sequences[x.chr]),filename=`locus-${referenceName(sequences[x.chr]).replace(/[^\w.-]/g,'_')}-${origin+x.start+1}-${origin+x.end}-k${k}.png`;canvas.toBlob(blob=>{if(!blob){toast('PNG generation failed.');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.download=filename;a.href=url;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);},'image/png');};
+document.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)||$('guide').open||$('coordinatesDialog').open)return;const d=(x.end-x.start)*.15;if(e.key==='+'||e.key==='='){e.preventDefault();zoom(.5);}if(e.key==='-'){e.preventDefault();zoom(2);}if(e.key==='ArrowLeft'){e.preventDefault();pan(-d);}if(e.key==='ArrowRight'){e.preventDefault();pan(d);}if(e.key==='ArrowUp'){e.preventDefault();pan(linked?-d:0,-(y.end-y.start)*.15);}if(e.key==='ArrowDown'){e.preventDefault();pan(linked?d:0,(y.end-y.start)*.15);}});
 new ResizeObserver(()=>renderBase()).observe($('plotContainer'));
 setup(makeDemo());

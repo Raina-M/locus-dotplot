@@ -9,7 +9,7 @@ import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 APP_DIRECTORY = Path(__file__).resolve().parent / "dist"
 
 
