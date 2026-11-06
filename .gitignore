@@ -1,0 +1,6 @@
+*.tar.gz
+.DS_Store
+.openai/local*
+__pycache__/
+*.py[cod]
+releases/
