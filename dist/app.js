@@ -1,15 +1,17 @@
-import {makeDemo,parseFasta,parseTrack,autoK,clampRegion,sequenceOrigin,referenceName,withSequenceCoordinates,projectTrackFeatures,trackCoverage} from './core.js';
+import {indexFasta,readSequenceRegion} from './fasta.js';
+import {makeDemo,sequenceLength,MAX_DOTPLOT_SPAN,canComputeDotplot,parseTrack,autoK,clampRegion,sequenceOrigin,referenceName,withSequenceCoordinates,projectTrackFeatures,trackCoverage} from './core.js';
 const $=id=>document.getElementById(id),fmt=n=>Math.round(n).toLocaleString('en-US');
 const bp=n=>n>=1e6?`${+(n/1e6).toFixed(2)} Mb`:n>=1000?`${+(n/1000).toFixed(1)} kb`:`${Math.round(n)} bp`;
 const colors=['#187f78','#b98b47','#648bbb','#a77aa3','#bb7575','#819b60'];
-let sequences=[],tracks=[],x,y,linked=true,k=41,result=null,worker,timer,job=0,cache=new Map(),geometry,hover=null,drag=null,toastTimer,viewKey='',demo=true;
+let sequences=[],tracks=[],x,y,linked=true,k=41,result=null,worker,timer,job=0,cache=new Map(),geometry,hover=null,drag=null,toastTimer,viewKey='',demo=true,loading=false,interactionMode='box',dotplotCutoff=MAX_DOTPLOT_SPAN;
 const canvas=$('plot'),ctx=canvas.getContext('2d'),base=document.createElement('canvas');
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,6500);}
 function setup(data,isDemo=true,label='Synthetic reference'){
+  if(loading)return;
   if(worker)worker.terminate();clearTimeout(timer);job++;sequences=data.sequences;tracks=data.tracks.map((t,i)=>({...t,id:crypto.randomUUID(),visible:true,color:t.color||colors[i%colors.length]}));
-  x={chr:0,start:0,end:sequences[0].seq.length};y={...x};linked=true;demo=isDemo;cache.clear();result=null;
+  x={chr:0,start:0,end:sequenceLength(sequences[0])};y={...x};linked=true;demo=isDemo;cache.clear();result=null;
   for(const id of ['xChr','yChr']){$(id).replaceChildren(...sequences.map((s,i)=>{const o=document.createElement('option');o.value=i;o.textContent=s.label||s.name;return o;}));}
-  $('genomeName').textContent=label;$('genomeMeta').textContent=`${sequences.length} contig${sequences.length>1?'s':''} · ${bp(sequences.reduce((n,s)=>n+s.seq.length,0))}`;
+  $('genomeName').textContent=label;$('genomeMeta').textContent=`${sequences.length} contig${sequences.length>1?'s':''} · ${bp(sequences.reduce((n,s)=>n+sequenceLength(s),0))}`;
   $('demoNote').textContent=demo?'Explore a synthetic chromosome with a duplication, an inversion, and repeat elements.':'Your local genome is loaded. Add matching annotation or signal files to explore its context.';
   $('inversionButton').disabled=!demo;document.querySelector('.example-badge').textContent=demo?'EXAMPLE DATA':'LOCAL DATA';
   $('autoK').checked=true;updateLinked();renderTrackList();navigate();
@@ -40,34 +42,51 @@ function renderTrackList(){
 const regionText=r=>`${fmt(sequenceOrigin(sequences[r.chr])+r.start+1)}–${fmt(sequenceOrigin(sequences[r.chr])+r.end)}`;
 function updateLinked(){$('linkAxes').classList.toggle('linked',linked);$('linkAxes').setAttribute('aria-pressed',String(linked));$('linkAxes').querySelector('small').textContent=linked?'LINKED':'FREE';}
 function navigate(){
-  x=clampRegion(x,sequences[x.chr].seq.length);y=clampRegion(y,sequences[y.chr].seq.length);
+  if(loading)return;
+  x=clampRegion(x,sequenceLength(sequences[x.chr]));y=clampRegion(y,sequenceLength(sequences[y.chr]));
   $('xChr').value=x.chr;$('yChr').value=y.chr;$('xRegion').value=regionText(x);$('yRegion').value=regionText(y);
   if($('autoK').checked)k=autoK(Math.max(x.end-x.start,y.end-y.start));
   $('kSlider').value=k;$('kValue').innerHTML=`${k} <small>bp</small>`;
-  $('zoomLabel').textContent=`${+(sequences[x.chr].seq.length/(x.end-x.start)).toFixed(1)}×`;
+  $('zoomLabel').textContent=`${+(sequenceLength(sequences[x.chr])/(x.end-x.start)).toFixed(1)}×`;
   $('modeBadge').textContent=x.chr===y.chr?'SELF COMPARISON':'CONTIG COMPARISON';
+  $('centerDiagonal').disabled=x.chr!==y.chr;
   $('windowStat').textContent=`${bp(x.end-x.start)} × ${bp(y.end-y.start)}`;
   viewKey=JSON.stringify([x,y,k,$('repeatFilter').value]);result=cache.get(viewKey)||null;hover=null;renderBase();
   clearTimeout(timer);if(worker){worker.terminate();worker=null;}job++;
+  if(!canComputeDotplot(x,y,dotplotCutoff)){
+    result=null;$('computing').hidden=true;$('exportButton').disabled=true;
+    for(const id of ['matchesStat','timeStat','samplingStat'])$(id).textContent='—';
+    $('status').textContent=`Zoom in to ${bp(dotplotCutoff)} or less on both axes to compute matches.`;
+    $('filterNote').textContent=`Dotplot paused above ${bp(dotplotCutoff)} per axis. Drag a box, scroll to zoom, or enter smaller coordinates.`;
+    renderBase();return;
+  }
   if(result){finish(result);return;}
   $('computing').hidden=false;$('exportButton').disabled=true;
   for(const id of ['matchesStat','timeStat','samplingStat'])$(id).textContent='…';
   $('status').textContent='Computing visible region…';
   const id=job,key=viewKey;
-  timer=setTimeout(()=>{
-    worker=new Worker('./worker.js',{type:'module'});
-    worker.onerror=e=>{if(id!==job)return;$('computing').hidden=true;$('status').textContent='Computation failed';toast('The dotplot worker failed. Serve this app over HTTP and use a smaller region.');console.error(e);};
-    worker.onmessage=({data})=>{if(data.id!==job)return;if(data.error){toast(data.error);$('computing').hidden=true;$('status').textContent=data.error;for(const id of ['matchesStat','timeStat','samplingStat'])$(id).textContent='Unavailable';return;}result=data;cache.set(key,result);if(cache.size>8)cache.delete(cache.keys().next().value);finish(result);};
-    worker.postMessage({type:'init',sequences});worker.postMessage({id,x,y,k,options:{maxOccurrence:Number($('repeatFilter').value)}});
+  timer=setTimeout(async ()=>{
+    const queryX={...x},queryY={...y},queryK=k;
+    try{
+      const same=queryX.chr===queryY.chr&&queryX.start===queryY.start&&queryX.end===queryY.end;
+      const xSequence=await readSequenceRegion(sequences[queryX.chr],queryX.start,queryX.end);
+      if(id!==job)return;
+      const ySequence=same?xSequence:await readSequenceRegion(sequences[queryY.chr],queryY.start,queryY.end);
+      if(id!==job)return;
+      worker=new Worker('./worker.js',{type:'module'});
+      worker.onerror=e=>{if(id!==job)return;$('computing').hidden=true;$('status').textContent='Computation failed';toast('The dotplot worker failed. Serve this app over HTTP and use a smaller region.');console.error(e);};
+      worker.onmessage=({data})=>{if(data.id!==job)return;if(data.error){toast(data.error);$('computing').hidden=true;$('status').textContent=data.error;for(const id of ['matchesStat','timeStat','samplingStat'])$(id).textContent='Unavailable';return;}result=data;cache.set(key,result);if(cache.size>8)cache.delete(cache.keys().next().value);finish(result);};
+      worker.postMessage({id,xSequence,ySequence,k:queryK,options:{maxOccurrence:Number($('repeatFilter').value)}});
+    }catch(error){if(id!==job)return;$('computing').hidden=true;$('status').textContent='Sequence read failed';toast(error.message);}
   },100);
 }
 function finish(r){$('computing').hidden=true;$('exportButton').disabled=false;$('matchesStat').textContent=fmt(r.points.length/3);$('timeStat').textContent=`${Math.round(r.ms)} ms`;$('samplingStat').textContent=r.w===1?'All k-mer positions':`${r.w} positions`;
   $('filterNote').textContent=`${fmt(r.filtered)} repetitive Y seeds omitted.${r.limited?' Pair cap reached; matches are truncated.':' Sampled exact matches; not an alignment or exhaustive repeat census.'}`;
   $('status').textContent=`${demo?'Synthetic example':'Local genome'} · ${fmt(r.points.length/3)} verified seed pairs${r.limited?' · PAIR CAP REACHED':''}`;renderBase();}
-function readRegion(axis){try{const value=$(axis+'Region').value.trim().replaceAll(',','');const m=value.match(/^(\d+)\s*[-–:]\s*(\d+)$/);if(!m)throw Error('Enter a region as start–end, for example 1–100,000.');let r=axis==='x'?x:y;const origin=sequenceOrigin(sequences[r.chr]),start=Number(m[1])-1-origin,end=Number(m[2])-origin;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<=start||end>sequences[r.chr].seq.length)throw Error(`Region must be within ${fmt(origin+1)}–${fmt(origin+sequences[r.chr].seq.length)}.`);r={...r,start,end};if(axis==='x')x=r;else y=r;if(linked){if(axis==='x')y={...r};else x={...r};}navigate();}catch(e){toast(e.message);}}
-function transformRegion(r,factor,anchor=.5){const span=r.end-r.start,newSpan=span*factor,position=r.start+span*anchor;return clampRegion({...r,start:position-newSpan*anchor,end:position+newSpan*(1-anchor)},sequences[r.chr].seq.length);}
+function readRegion(axis){try{const value=$(axis+'Region').value.trim().replaceAll(',','');const m=value.match(/^(\d+)\s*[-–:]\s*(\d+)$/);if(!m)throw Error('Enter a region as start–end, for example 1–100,000.');let r=axis==='x'?x:y;const origin=sequenceOrigin(sequences[r.chr]),start=Number(m[1])-1-origin,end=Number(m[2])-origin;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<=start||end>sequenceLength(sequences[r.chr]))throw Error(`Region must be within ${fmt(origin+1)}–${fmt(origin+sequenceLength(sequences[r.chr]))}.`);r={...r,start,end};if(axis==='x')x=r;else y=r;if(linked){if(axis==='x')y={...r};else x={...r};}navigate();}catch(e){toast(e.message);}}
+function transformRegion(r,factor,anchor=.5){const span=r.end-r.start,newSpan=span*factor,position=r.start+span*anchor;return clampRegion({...r,start:position-newSpan*anchor,end:position+newSpan*(1-anchor)},sequenceLength(sequences[r.chr]));}
 function zoom(factor,ax=.5,ay=.5){x=transformRegion(x,factor,ax);y=linked?{...x}:transformRegion(y,factor,ay);navigate();}
-function pan(dx,dy=dx){const shift=(r,d)=>clampRegion({...r,start:r.start+d,end:r.end+d},sequences[r.chr].seq.length);x=shift(x,dx);y=linked?{...x}:shift(y,dy);navigate();}
+function pan(dx,dy=dx){const shift=(r,d)=>clampRegion({...r,start:r.start+d,end:r.end+d},sequenceLength(sequences[r.chr]));x=shift(x,dx);y=linked?{...x}:shift(y,dy);navigate();}
 function ticks(r){const span=r.end-r.start,raw=span/5,power=10**Math.floor(Math.log10(raw)),v=raw/power,step=(v<=1?1:v<=2?2:v<=5?5:10)*power,origin=sequenceOrigin(sequences[r.chr]);const out=[];for(let p=Math.ceil((origin+r.start)/step)*step;p<=origin+r.end;p+=step)out.push(p-origin);return out;}
 function scale(v,r){return (v-r.start)/(r.end-r.start);}
 function renderBase(){
@@ -85,11 +104,18 @@ function renderBase(){
   for(const p of ticks(x)){const px=left+scale(p,x)*size;c.strokeStyle='#edf1eb';c.beginPath();c.moveTo(px,top);c.lineTo(px,top+size);c.stroke();c.fillStyle='#97a49a';c.textAlign='center';c.fillText(bp(p+sequenceOrigin(sequences[x.chr])),px,top-10);}
   for(const p of ticks(y)){const py=top+scale(p,y)*size;c.strokeStyle='#edf1eb';c.beginPath();c.moveTo(left,py);c.lineTo(left+size,py);c.stroke();c.fillStyle='#97a49a';c.textAlign='right';c.fillText(bp(p+sequenceOrigin(sequences[y.chr])),width>420?left-36-visible.length*16:Math.max(20,left-36-visible.length*16),py);}
   c.strokeStyle='#dae4d8';c.strokeRect(left+.5,top+.5,size,size);
+  if(!canComputeDotplot(x,y,dotplotCutoff)){
+    c.fillStyle='#526e65';c.textAlign='center';c.font='12px system-ui';
+    c.fillText('Zoom in to see sequence matches',left+size/2,top+size/2-14);
+    c.font='10px system-ui';c.fillText(`Maximum ${bp(dotplotCutoff)} on each axis`,left+size/2,top+size/2+7);
+    c.fillText('Box zoom selects a region · Pan view moves the view',left+size/2,top+size/2+28);
+  }
   if(result){c.save();c.beginPath();c.rect(left,top,size,size);c.clip();const pts=result.points;
-    for(const strand of [1,-1]){if(!$(strand===1?'showForward':'showReverse').checked)continue;c.fillStyle=strand===1?'#177e768c':'#cd8b62a0';c.strokeStyle=strand===1?'#177e768c':'#cd8b62a0';c.lineWidth=1;
+    const strokeSize=Number($('strokeSize').value);
+    for(const strand of [1,-1]){if(!$(strand===1?'showForward':'showReverse').checked)continue;const color=$(strand===1?'forwardColor':'reverseColor').value;c.fillStyle=color+(strand===1?'8c':'a0');c.strokeStyle=c.fillStyle;c.lineWidth=strokeSize;
       const kx=k/(x.end-x.start)*size,ky=k/(y.end-y.start)*size;
       c.beginPath();for(let i=0;i<pts.length;i+=3){if(pts[i+2]!==strand)continue;const px=left+pts[i]/(x.end-x.start)*size,py=top+pts[i+1]/(y.end-y.start)*size;
-        if(kx>1.5||ky>1.5){c.moveTo(px,py+(strand<0?ky:0));c.lineTo(px+Math.max(.7,kx),py+(strand>0?ky:0));}else c.rect(px,py,1,1);
+        if(kx>1.5||ky>1.5){c.moveTo(px,py+(strand<0?ky:0));c.lineTo(px+Math.max(.7,kx),py+(strand>0?ky:0));}else c.rect(px-strokeSize/2,py-strokeSize/2,strokeSize,strokeSize);
       }if(kx>1.5||ky>1.5)c.stroke();else c.fill();
     }c.restore();}
   c.textAlign='center';c.fillStyle='#6f8878';c.font='9px "DM Sans",system-ui';c.fillText(`${referenceName(sequences[x.chr])}  ·  X`,left+size/2,top+size+29);
@@ -141,24 +167,39 @@ function showHover(p){
 }
 canvas.addEventListener('pointermove',e=>{hover=location(e);if(drag){$('tooltip').hidden=true;}else showHover(hover);drawOverlay();});
 canvas.addEventListener('pointerleave',()=>{if(!drag){hover=null;$('tooltip').hidden=true;drawOverlay();}});
-canvas.addEventListener('pointerdown',e=>{if(e.button!==0)return;const point=location(e);if(!inside(point))return;canvas.setPointerCapture(e.pointerId);drag={point,select:e.shiftKey,x:{...x},y:{...y}};canvas.style.cursor=e.shiftKey?'crosshair':'grabbing';});
+canvas.addEventListener('pointerdown',e=>{if(e.button!==0)return;const point=location(e);if(!inside(point))return;canvas.setPointerCapture(e.pointerId);drag={point,select:interactionMode==='box'&&!e.shiftKey,x:{...x},y:{...y}};canvas.style.cursor=drag.select?'crosshair':'grabbing';});
 canvas.addEventListener('pointerup',e=>{
-  if(!drag)return;const p=clipPoint(location(e)),d=drag;drag=null;canvas.style.cursor='crosshair';$('tooltip').hidden=true;
+  if(!drag)return;const p=clipPoint(location(e)),d=drag;drag=null;canvas.style.cursor=interactionMode==='pan'?'grab':'crosshair';$('tooltip').hidden=true;
   const {left,top,size}=geometry,dx=p.x-d.point.x,dy=p.y-d.point.y;if(Math.abs(dx)<3&&Math.abs(dy)<3){drawOverlay();return;}
-  if(d.select){if(Math.abs(dx)<5||Math.abs(dy)<5)return;const region=(r,a,b,origin)=>({...r,start:r.start+(Math.min(a,b)-origin)/size*(r.end-r.start),end:r.start+(Math.max(a,b)-origin)/size*(r.end-r.start)});x=region(d.x,d.point.x,p.x,left);y=linked?{...x}:region(d.y,d.point.y,p.y,top);navigate();}
-  else pan(-dx/size*(x.end-x.start),-dy/size*(y.end-y.start));
+  if(d.select){if(Math.abs(dx)<5||Math.abs(dy)<5){drawOverlay();return;}const region=(r,a,b,origin)=>({...r,start:r.start+(Math.min(a,b)-origin)/size*(r.end-r.start),end:r.start+(Math.max(a,b)-origin)/size*(r.end-r.start)});x=region(d.x,d.point.x,p.x,left);y=region(d.y,d.point.y,p.y,top);if(linked&&(x.start!==y.start||x.end!==y.end)){linked=false;updateLinked();}navigate();}
+  else {linked=false;updateLinked();pan(-dx/size*(x.end-x.start),-dy/size*(y.end-y.start));}
 });
-canvas.addEventListener('pointercancel',()=>{drag=null;canvas.style.cursor='crosshair';drawOverlay();});
+canvas.addEventListener('pointercancel',()=>{drag=null;canvas.style.cursor=interactionMode==='pan'?'grab':'crosshair';drawOverlay();});
 canvas.addEventListener('wheel',e=>{const p=location(e);if(!inside(p))return;e.preventDefault();const {left,top,size}=geometry;zoom(Math.exp(Math.sign(e.deltaY)*.22),(p.x-left)/size,(p.y-top)/size);},{passive:false});
 canvas.addEventListener('dblclick',e=>{const p=location(e);if(inside(p))zoom(.5,(p.x-geometry.left)/geometry.size,(p.y-geometry.top)/geometry.size);});
-$('zoomIn').onclick=()=>zoom(.5);$('zoomOut').onclick=()=>zoom(2);$('panLeft').onclick=()=>pan(-(x.end-x.start)*.25);$('panRight').onclick=()=>pan((x.end-x.start)*.25);
-$('fitButton').onclick=()=>{x={...x,start:0,end:sequences[x.chr].seq.length};y={...y,start:0,end:sequences[y.chr].seq.length};navigate();};
+$('zoomIn').onclick=()=>zoom(.5);$('zoomOut').onclick=()=>zoom(2);
+// Direction controls move exactly one axis, including when navigation was linked.
+function panAxis(axis,direction){if(loading)return;linked=false;updateLinked();if(axis==='x')pan(direction*(x.end-x.start)*.25,0);else pan(0,direction*(y.end-y.start)*.25);}
+$('panLeft').onclick=()=>panAxis('x',-1);$('panRight').onclick=()=>panAxis('x',1);
+$('panUp').onclick=()=>panAxis('y',-1);$('panDown').onclick=()=>panAxis('y',1);
+$('centerDiagonal').onclick=()=>{if(loading||x.chr!==y.chr)return;const span=y.end-y.start,center=(x.start+x.end)/2;y=clampRegion({...y,start:center-span/2,end:center+span/2},sequenceLength(sequences[y.chr]));navigate();};
+function setInteractionMode(mode){drag=null;interactionMode=mode;canvas.style.cursor=mode==='pan'?'grab':'crosshair';for(const id of ['boxMode','panMode'])$(id).setAttribute('aria-pressed',String(id===(mode==='pan'?'panMode':'boxMode')));$('navigationHint').textContent=mode==='pan'?'Drag to pan · Scroll to zoom · Choose Box zoom to select a region':'Drag a box to zoom · Scroll to zoom · Shift + drag to pan';drawOverlay();}
+$('boxMode').onclick=()=>setInteractionMode('box');$('panMode').onclick=()=>setInteractionMode('pan');
+$('computeCutoff').onchange=()=>{
+  const mb=Number($('computeCutoff').value),bases=mb*1e6;
+  if(!Number.isFinite(mb)||mb<=0||!Number.isSafeInteger(bases)){toast('Enter a positive cutoff in Mb (whole base pairs).');$('computeCutoff').value=dotplotCutoff/1e6;return;}
+  dotplotCutoff=bases;$('cutoffWarning').hidden=mb<=10;navigate();
+};
+for(const id of ['forwardColor','reverseColor','strokeSize'])$(id).onchange=()=>{
+  $('forwardLegend').style.backgroundColor=$('forwardColor').value;$('reverseLegend').style.backgroundColor=$('reverseColor').value;renderBase();
+};
+$('fitButton').onclick=()=>{x={...x,start:0,end:sequenceLength(sequences[x.chr])};y={...y,start:0,end:sequenceLength(sequences[y.chr])};navigate();};
 $('linkAxes').onclick=()=>{linked=!linked;if(linked)y={...x};updateLinked();navigate();};
-for(const axis of ['x','y']){$('go'+axis.toUpperCase()).onclick=()=>readRegion(axis);$(axis+'Region').onkeydown=e=>{if(e.key==='Enter')readRegion(axis);};$(axis+'Chr').onchange=e=>{const r={chr:Number(e.target.value),start:0,end:sequences[Number(e.target.value)].seq.length};if(axis==='x')x=r;else y=r;if(linked){x={...r};y={...r};}navigate();};}
+for(const axis of ['x','y']){$('go'+axis.toUpperCase()).onclick=()=>readRegion(axis);$(axis+'Region').onkeydown=e=>{if(e.key==='Enter')readRegion(axis);};$(axis+'Chr').onchange=e=>{const r={chr:Number(e.target.value),start:0,end:sequenceLength(sequences[Number(e.target.value)])};if(axis==='x')x=r;else y=r;if(linked){x={...r};y={...r};}navigate();};}
 $('kSlider').oninput=e=>{k=Number(e.target.value);$('autoK').checked=false;navigate();};$('autoK').onchange=navigate;$('repeatFilter').onchange=navigate;
 for(const id of ['showForward','showReverse','showStrand'])$(id).onchange=renderBase;
 function openGuide(){$('guide').showModal();}for(const id of ['guideButton','helpButton'])$(id).onclick=openGuide;$('closeGuide').onclick=()=>$('guide').close();$('guide').onclick=e=>{if(e.target===$('guide')){const r=$('guide').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('guide').close();}};
-function populateCoordinates(){const s=sequences[Number($('coordinateSequence').value)];$('coordinateChromosome').value=referenceName(s);$('coordinateStart').value=fmt(sequenceOrigin(s)+1);$('coordinateLength').textContent=`${fmt(s.seq.length)} bp loaded. Enter the chromosome position of the first FASTA base, one-based.`;$('coordinateError').textContent='';}
+function populateCoordinates(){const s=sequences[Number($('coordinateSequence').value)];$('coordinateChromosome').value=referenceName(s);$('coordinateStart').value=fmt(sequenceOrigin(s)+1);$('coordinateLength').textContent=`${fmt(sequenceLength(s))} bp loaded. Enter the chromosome position of the first FASTA base, one-based.`;$('coordinateError').textContent='';}
 function openCoordinates(index=x.chr){
   $('coordinateSequence').replaceChildren(...sequences.map((s,i)=>{const option=document.createElement('option');option.value=i;option.textContent=s.label||s.name;return option;}));
   $('coordinateSequence').value=index>=0?index:x.chr;populateCoordinates();$('coordinatesDialog').showModal();
@@ -175,10 +216,16 @@ $('workspaceTab').onclick=()=>canvas.focus();$('loadGenome').onclick=()=>$('geno
 $('mobileGenome').onclick=()=>$('genomeFile').click();$('mobileTrack').onclick=()=>$('trackFile').click();$('mobileFit').onclick=()=>$('fitButton').click();
 $('genomeFile').onchange=async e=>{
   const files=[...e.target.files];if(!files.length)return;
-  try{if(files.reduce((n,f)=>n+f.size,0)>20*1024**2)throw Error('This prototype accepts up to 20 MiB of uncompressed FASTA per workspace. Larger genomes need the indexed backend described in Methods.');
-    const loaded=[];for(const file of files){for(const s of parseFasta(await file.text()))loaded.push({...s,label:files.length>1?`${file.name} / ${s.name}`:s.name});}
+  loading=true;clearTimeout(timer);if(worker){worker.terminate();worker=null;}job++;
+  $('computing').hidden=true;$('exportButton').disabled=true;$('genomeFile').disabled=true;
+  $('fastaNotice').hidden=false;$('fastaNotice').textContent='Indexing FASTA locally. Large genomes may take time; sequence regions are read from your file as needed.';
+  try{
+    const loaded=[];for(const file of files){for(const s of await indexFasta(file,progress=>{$('status').textContent=`Indexing ${file.name}: ${Math.round(progress*100)}%`;}))loaded.push({...s,label:files.length>1?`${file.name} / ${s.name}`:s.name});}
+    loading=false;
     setup({sequences:loaded,tracks:[]},false,files.length===1?files[0].name:`${files.length} FASTA files`);toast(`Loaded ${loaded.length} sequences. For an extracted region, use Sequence coordinates to set its source start (or a chr:start-end FASTA header).`);
-  }catch(error){toast(error.message);}finally{e.target.value='';}
+  }catch(error){toast(error.message);loading=false;navigate();}finally{loading=false;e.target.disabled=false;e.target.value='';
+    $('fastaNotice').textContent='Large FASTA files may load slowly. Matches wait until both axes are within your computation cutoff (default 5 Mb).';
+  }
 };
 $('trackFile').onchange=async e=>{
   const files=[...e.target.files];try{if(tracks.length+files.length>12)throw Error('Please keep at most 12 tracks in this prototype.');
@@ -189,6 +236,6 @@ $('trackFile').onchange=async e=>{
 $('resetDemo').onclick=()=>setup(makeDemo());
 $('inversionButton').onclick=()=>{if(!demo)return;linked=false;updateLinked();x={chr:0,start:140000,end:220000};y={chr:0,start:385000,end:465000};navigate();};
 $('exportButton').onclick=()=>{hover=null;drawOverlay();const origin=sequenceOrigin(sequences[x.chr]),filename=`locus-${referenceName(sequences[x.chr]).replace(/[^\w.-]/g,'_')}-${origin+x.start+1}-${origin+x.end}-k${k}.png`;canvas.toBlob(blob=>{if(!blob){toast('PNG generation failed.');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.download=filename;a.href=url;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);},'image/png');};
-document.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)||$('guide').open||$('coordinatesDialog').open)return;const d=(x.end-x.start)*.15;if(e.key==='+'||e.key==='='){e.preventDefault();zoom(.5);}if(e.key==='-'){e.preventDefault();zoom(2);}if(e.key==='ArrowLeft'){e.preventDefault();pan(-d);}if(e.key==='ArrowRight'){e.preventDefault();pan(d);}if(e.key==='ArrowUp'){e.preventDefault();pan(linked?-d:0,-(y.end-y.start)*.15);}if(e.key==='ArrowDown'){e.preventDefault();pan(linked?d:0,(y.end-y.start)*.15);}});
+document.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)||$('guide').open||$('coordinatesDialog').open)return;if(e.key==='+'||e.key==='='){e.preventDefault();zoom(.5);}if(e.key==='-'){e.preventDefault();zoom(2);}const direction={ArrowLeft:['x',-1],ArrowRight:['x',1],ArrowUp:['y',-1],ArrowDown:['y',1]}[e.key];if(direction){e.preventDefault();panAxis(...direction);}});
 new ResizeObserver(()=>renderBase()).observe($('plotContainer'));
 setup(makeDemo());

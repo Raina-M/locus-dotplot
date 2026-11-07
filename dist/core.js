@@ -1,3 +1,6 @@
+export const sequenceLength = sequence => sequence.length ?? sequence.seq.length;
+export const MAX_DOTPLOT_SPAN = 5_000_000;
+export const canComputeDotplot = (x,y,cutoff=MAX_DOTPLOT_SPAN) => Number.isFinite(cutoff) && cutoff>0 && x.end-x.start <= cutoff && y.end-y.start <= cutoff;
 export const reverseComplement = s => [...s].reverse().map(b => ({A:'T',T:'A',G:'C',C:'G'}[b] || 'N')).join('');
 export function parseFasta(text) {
   const sequences = []; let current;
@@ -69,10 +72,10 @@ export const sequenceOrigin = sequence => sequence.origin ?? 0;
 export const referenceName = sequence => sequence.referenceName ?? sequence.name;
 export function withSequenceCoordinates(sequence,name,start){
   if(!name.trim())throw Error('A source chromosome name is required.');
-  if(!Number.isSafeInteger(start)||start<1||!Number.isSafeInteger(start-1+sequence.seq.length))throw Error('Source start must be a positive, safe integer (one-based).');
+  if(!Number.isSafeInteger(start)||start<1||!Number.isSafeInteger(start-1+sequenceLength(sequence)))throw Error('Source start must be a positive, safe integer (one-based).');
   return {...sequence,referenceName:name.trim(),origin:start-1};
 }
-export function projectTrackFeatures(track,sequence,region={start:0,end:sequence.seq.length}){
+export function projectTrackFeatures(track,sequence,region={start:0,end:sequenceLength(sequence)}){
   const origin=sequenceOrigin(sequence),name=referenceName(sequence);
   return track.features.filter(f=>f.chr===name&&f.end>origin+region.start&&f.start<origin+region.end).map(f=>({...f,start:f.start-origin,end:f.end-origin,blocks:f.blocks?.map(b=>({start:b.start-origin,end:b.end-origin}))}));
 }
@@ -80,7 +83,7 @@ export function trackCoverage(track,sequences){
   let overlapping=0,outside=0,unmatched=0;
   for(const f of track.features){const matching=sequences.filter(s=>referenceName(s)===f.chr);
     if(!matching.length)unmatched++;
-    else if(matching.some(s=>f.end>sequenceOrigin(s)&&f.start<sequenceOrigin(s)+s.seq.length))overlapping++;
+    else if(matching.some(s=>f.end>sequenceOrigin(s)&&f.start<sequenceOrigin(s)+sequenceLength(s)))overlapping++;
     else outside++;
   }
   return {total:track.features.length,overlapping,outside,unmatched};

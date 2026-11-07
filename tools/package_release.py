@@ -31,7 +31,7 @@ def build():
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file in files:
             name = folder + "/" + file.relative_to(ROOT).as_posix()
-            entry = zipfile.ZipInfo(name, date_time=(2026, 11, 6, 0, 0, 0))
+            entry = zipfile.ZipInfo(name, date_time=(2026, 11, 7, 0, 0, 0))
             entry.create_system = 3
             entry.external_attr = ((0o100755 if file.suffix in {".sh", ".command"} else 0o100644) << 16)
             entry.compress_type = zipfile.ZIP_DEFLATED

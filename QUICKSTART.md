@@ -1,12 +1,12 @@
 # Run Locus on your machine
 
-1. Download `locus-0.1.1.zip` (or the `.tar.gz` archive) and extract it completely.
+1. Download `locus-0.2.0.zip` (or the `.tar.gz` archive) and extract it completely.
 2. Install **Python 3.9 or newer** if it is not already available. No Python packages, Node, npm, account or Internet connection are needed to run Locus.
 3. Start the launcher for your operating system:
 
 | System | Launch |
 |---|---|
-| macOS | Double-click **Start Locus.command**. If your system does not allow opening a downloaded script, use Terminal: `python3 /path/to/Locus-0.1.1/run_locus.py`. |
+| macOS | Double-click **Start Locus.command**. If your system does not allow opening a downloaded script, use Terminal: `python3 /path/to/Locus-0.2.0/run_locus.py`. |
 | Windows | Double-click **Start Locus.bat**; the launcher tries `py -3`, then `python`. |
 | Linux | Run `sh start-locus.sh` from the extracted directory. |
 
@@ -17,7 +17,7 @@ For a predictable port, run `python3 run_locus.py --port 8765`. To start without
 ## Explore
 
 - The initial view is a synthetic 600 kb chromosome with a known duplication and inversion.
-- Load your FASTA (up to 20 MiB combined), then BED/GFF/GTF or bedGraph annotations. Files are processed in browser memory; the server only serves the bundled UI.
+- Load your plain FASTA, then BED/GFF/GTF or bedGraph annotations. There is no fixed FASTA size cap. Large files may take time to scan; a sparse local byte index allows regional sequence reads. The server only serves the bundled UI. Matches pause until both axes fit the computation cutoff (default 5 Mb). Change it under Dotplot settings; above 10 Mb a performance warning appears. Drag a box to zoom; choose Pan view or Shift-drag to move around. Arrow buttons move one axis independently, and Diagonal centers Y on X for the same contig. Forward/reverse colors and stroke size are also available in Dotplot settings.
 - Type a one-based region such as `155001-205000`. Pan or zoom on the plot. Unlink X/Y to compare different regions or contigs.
 - Annotation sequence names must match FASTA headers exactly. Track arrows show strand where supplied.
 - Use **Export PNG** to save the dotplot and tracks. Reloading or closing the app clears loaded files; reselect them in a new session.
