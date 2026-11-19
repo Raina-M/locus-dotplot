@@ -51,4 +51,15 @@ test('large-view gate, box zoom, and regional worker payload stay consistent',as
  get('computeCutoff').value='';get('computeCutoff').onchange();assert.equal(vm.runInContext('dotplotCutoff',sandbox),5000000);vm.runInContext('clearTimeout(toastTimer)',sandbox);
  vm.runInContext('x={chr:0,start:0,end:5000000};y={...x};navigate()',sandbox);await wait();
  const start=vm.runInContext('x.start',sandbox);handlers.pointerdown({button:0,pointerId:1,clientX:left+size*.5,clientY:top+size*.5,shiftKey:true});handlers.pointerup({clientX:left+size*.4,clientY:top+size*.5});assert.ok(vm.runInContext('x.start',sandbox)>start);await wait();
+ const beforeLimit = messages.length;
+ get('maxPairs').value = '1000000';
+ get('maxPairs').onchange();
+ await wait();
+ assert.equal(messages.length, beforeLimit + 1);
+ assert.equal(messages.at(-1).options.maxPairs, 1000000);
+ get('pairHelp').hidden = true;
+ get('pairInfo').onclick();
+ assert.equal(get('pairHelp').hidden, false);
+ get('pairInfo').onclick();
+ assert.equal(get('pairHelp').hidden, true);
 });

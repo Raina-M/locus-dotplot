@@ -42,3 +42,14 @@ test('region FASTA headers are one-based inclusive and must agree with sequence 
   assert.throws(()=>parseFasta('>chr7:0-3\nACGT'),/one-based/);
   assert.throws(()=>withSequenceCoordinates(s,'chr7',0),/positive/);assert.throws(()=>withSequenceCoordinates(s,'',1),/chromosome/);
 });
+
+test('a capped view includes late Y coordinates and reports all verified pairs', () => {
+  const sequence = 'A'.repeat(128);
+  const options = {maxOccurrence: 128, maxPairs: 100};
+  const result = computeMatches(sequence, sequence, 33, options);
+  const rows = result.points.filter((_, index) => index % 3 === 1);
+  assert.equal(result.totalPairs, 96 * 96);
+  assert.equal(rows.length, 100);
+  assert.ok(Math.min(...rows) < 10 && Math.max(...rows) > 85);
+  assert.deepEqual(computeMatches(sequence, sequence, 33, options).points, result.points);
+});

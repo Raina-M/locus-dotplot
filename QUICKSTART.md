@@ -1,12 +1,12 @@
 # Run Locus on your machine
 
-1. Download `locus-0.2.0.zip` (or the `.tar.gz` archive) and extract it completely.
+1. Download `locus-0.2.1.zip` (or the `.tar.gz` archive) and extract it completely.
 2. Install **Python 3.9 or newer** if it is not already available. No Python packages, Node, npm, account or Internet connection are needed to run Locus.
 3. Start the launcher for your operating system:
 
 | System | Launch |
 |---|---|
-| macOS | Double-click **Start Locus.command**. If your system does not allow opening a downloaded script, use Terminal: `python3 /path/to/Locus-0.2.0/run_locus.py`. |
+| macOS | Double-click **Start Locus.command**. If your system does not allow opening a downloaded script, use Terminal: `python3 /path/to/Locus-0.2.1/run_locus.py`. |
 | Windows | Double-click **Start Locus.bat**; the launcher tries `py -3`, then `python`. |
 | Linux | Run `sh start-locus.sh` from the extracted directory. |
 

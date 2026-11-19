@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-11-19
+
+- Fix the blank lower portion of dense dotplots by sampling verified pairs across the entire region.
+- Add an adjustable match-pair limit (1 to 2,000,000, default 240,000), clickable help, and displayed versus total pair counts.
+
 ## 0.2.0 — 2026-11-07
 
 - Remove the FASTA size cap and build a sparse local file index for regional sequence reads.

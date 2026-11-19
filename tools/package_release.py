@@ -22,7 +22,7 @@ def build():
     output.mkdir(exist_ok=True)
     files = [ROOT / name for name in TOP_LEVEL]
     for directory, extensions in [("dist", {".js", ".css", ".html", ".fa", ".bed", ".bedgraph"}),
-                                  ("tests", {".mjs", ".py"}), ("tools", {".py"})]:
+                                  ("docs/images", {".svg", ".jpg"}), ("tests", {".mjs", ".py"}), ("tools", {".py"})]:
         files.extend(p for p in sorted((ROOT / directory).rglob("*"))
                      if p.is_file() and not p.is_symlink() and p.suffix in extensions
                      and "__pycache__" not in p.parts)

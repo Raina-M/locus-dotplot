@@ -119,13 +119,34 @@ export function computeMatches(x,y,k,{budget=60000,maxOccurrence=30,maxPairs=240
   for(const seed of xs){let a=index.get(seed.hash);if(!a){a=[];index.set(seed.hash,a);}if(a.length<=maxOccurrence)a.push(seed);}
   const yc=new Map();for(const s of ys)yc.set(s.hash,(yc.get(s.hash)||0)+1);
   const out=[];let filtered=0,limited=false;
-  outer:for(const b of ys){const a=index.get(b.hash);if(!a)continue;if(a.length>maxOccurrence||yc.get(b.hash)>maxOccurrence){filtered++;continue;}
-    const word=y.slice(b.pos,b.pos+k),rc=reverseComplement(word);
-    for(const s of a){const xword=x.slice(s.pos,s.pos+k);const strands=[];if(xword===word)strands.push(1);if(xword===rc)strands.push(-1);
-      for(const strand of strands){if(out.length/3>=maxPairs){limited=true;break outer;}out.push(s.pos,b.pos,strand);}
+  let totalPairs = 0;
+  let randomState = 0x12345678;
+  // Reservoir sampling gives later matches the same chance as earlier ones.
+  // A fixed seed makes repeated views reproducible.
+  function recordPair(xPos, yPos, strand) {
+    totalPairs++;
+    if (totalPairs <= maxPairs) {
+      out.push(xPos, yPos, strand);
+      return;
+    }
+    limited = true;
+    randomState ^= randomState << 13;
+    randomState ^= randomState >>> 17;
+    randomState ^= randomState << 5;
+    const slot = Math.floor((randomState >>> 0) / 4294967296 * totalPairs);
+    if (slot < maxPairs) {
+      out[3 * slot] = xPos;
+      out[3 * slot + 1] = yPos;
+      out[3 * slot + 2] = strand;
     }
   }
-  return {points:new Int32Array(out),k,w,seeds:xs.length+ys.length,filtered,limited,ms:performance.now()-t};
+  for(const b of ys){const a=index.get(b.hash);if(!a)continue;if(a.length>maxOccurrence||yc.get(b.hash)>maxOccurrence){filtered++;continue;}
+    const word=y.slice(b.pos,b.pos+k),rc=reverseComplement(word);
+    for(const s of a){const xword=x.slice(s.pos,s.pos+k);const strands=[];if(xword===word)strands.push(1);if(xword===rc)strands.push(-1);
+      for (const strand of strands) recordPair(s.pos, b.pos, strand);
+    }
+  }
+  return {points:new Int32Array(out),k,w,seeds:xs.length+ys.length,filtered,limited,totalPairs,ms:performance.now()-t};
 }
 export function makeDemo(){
   let seed=71829;const random=()=>{seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return (seed>>>0)/4294967296;};

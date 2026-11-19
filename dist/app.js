@@ -4,6 +4,7 @@ const $=id=>document.getElementById(id),fmt=n=>Math.round(n).toLocaleString('en-
 const bp=n=>n>=1e6?`${+(n/1e6).toFixed(2)} Mb`:n>=1000?`${+(n/1000).toFixed(1)} kb`:`${Math.round(n)} bp`;
 const colors=['#187f78','#b98b47','#648bbb','#a77aa3','#bb7575','#819b60'];
 let sequences=[],tracks=[],x,y,linked=true,k=41,result=null,worker,timer,job=0,cache=new Map(),geometry,hover=null,drag=null,toastTimer,viewKey='',demo=true,loading=false,interactionMode='box',dotplotCutoff=MAX_DOTPLOT_SPAN;
+let maxPairs = 240000;
 const canvas=$('plot'),ctx=canvas.getContext('2d'),base=document.createElement('canvas');
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,6500);}
 function setup(data,isDemo=true,label='Synthetic reference'){
@@ -51,7 +52,7 @@ function navigate(){
   $('modeBadge').textContent=x.chr===y.chr?'SELF COMPARISON':'CONTIG COMPARISON';
   $('centerDiagonal').disabled=x.chr!==y.chr;
   $('windowStat').textContent=`${bp(x.end-x.start)} × ${bp(y.end-y.start)}`;
-  viewKey=JSON.stringify([x,y,k,$('repeatFilter').value]);result=cache.get(viewKey)||null;hover=null;renderBase();
+  viewKey=JSON.stringify([x,y,k,$('repeatFilter').value,maxPairs]);result=cache.get(viewKey)||null;hover=null;renderBase();
   clearTimeout(timer);if(worker){worker.terminate();worker=null;}job++;
   if(!canComputeDotplot(x,y,dotplotCutoff)){
     result=null;$('computing').hidden=true;$('exportButton').disabled=true;
@@ -76,13 +77,13 @@ function navigate(){
       worker=new Worker('./worker.js',{type:'module'});
       worker.onerror=e=>{if(id!==job)return;$('computing').hidden=true;$('status').textContent='Computation failed';toast('The dotplot worker failed. Serve this app over HTTP and use a smaller region.');console.error(e);};
       worker.onmessage=({data})=>{if(data.id!==job)return;if(data.error){toast(data.error);$('computing').hidden=true;$('status').textContent=data.error;for(const id of ['matchesStat','timeStat','samplingStat'])$(id).textContent='Unavailable';return;}result=data;cache.set(key,result);if(cache.size>8)cache.delete(cache.keys().next().value);finish(result);};
-      worker.postMessage({id,xSequence,ySequence,k:queryK,options:{maxOccurrence:Number($('repeatFilter').value)}});
+      worker.postMessage({id,xSequence,ySequence,k:queryK,options:{maxPairs,maxOccurrence:Number($('repeatFilter').value)}});
     }catch(error){if(id!==job)return;$('computing').hidden=true;$('status').textContent='Sequence read failed';toast(error.message);}
   },100);
 }
-function finish(r){$('computing').hidden=true;$('exportButton').disabled=false;$('matchesStat').textContent=fmt(r.points.length/3);$('timeStat').textContent=`${Math.round(r.ms)} ms`;$('samplingStat').textContent=r.w===1?'All k-mer positions':`${r.w} positions`;
-  $('filterNote').textContent=`${fmt(r.filtered)} repetitive Y seeds omitted.${r.limited?' Pair cap reached; matches are truncated.':' Sampled exact matches; not an alignment or exhaustive repeat census.'}`;
-  $('status').textContent=`${demo?'Synthetic example':'Local genome'} · ${fmt(r.points.length/3)} verified seed pairs${r.limited?' · PAIR CAP REACHED':''}`;renderBase();}
+function finish(r){$('computing').hidden=true;$('exportButton').disabled=false;$('matchesStat').textContent=fmt(r.totalPairs ?? r.points.length/3);$('timeStat').textContent=`${Math.round(r.ms)} ms`;$('samplingStat').textContent=r.w===1?'All k-mer positions':`${r.w} positions`;
+  $('filterNote').textContent=`${fmt(r.filtered)} repetitive Y seeds omitted.${r.limited?` Showing ${fmt(r.points.length/3)} of ${fmt(r.totalPairs)} verified pairs sampled across the full view.`:' Sampled exact matches; not an alignment or exhaustive repeat census.'}`;
+  $('status').textContent=`${demo?'Synthetic example':'Local genome'} · ${fmt(r.points.length/3)} verified seed pairs${r.limited?' displayed · FULL VIEW SAMPLED':''}`;renderBase();}
 function readRegion(axis){try{const value=$(axis+'Region').value.trim().replaceAll(',','');const m=value.match(/^(\d+)\s*[-–:]\s*(\d+)$/);if(!m)throw Error('Enter a region as start–end, for example 1–100,000.');let r=axis==='x'?x:y;const origin=sequenceOrigin(sequences[r.chr]),start=Number(m[1])-1-origin,end=Number(m[2])-origin;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<=start||end>sequenceLength(sequences[r.chr]))throw Error(`Region must be within ${fmt(origin+1)}–${fmt(origin+sequenceLength(sequences[r.chr]))}.`);r={...r,start,end};if(axis==='x')x=r;else y=r;if(linked){if(axis==='x')y={...r};else x={...r};}navigate();}catch(e){toast(e.message);}}
 function transformRegion(r,factor,anchor=.5){const span=r.end-r.start,newSpan=span*factor,position=r.start+span*anchor;return clampRegion({...r,start:position-newSpan*anchor,end:position+newSpan*(1-anchor)},sequenceLength(sequences[r.chr]));}
 function zoom(factor,ax=.5,ay=.5){x=transformRegion(x,factor,ax);y=linked?{...x}:transformRegion(y,factor,ay);navigate();}
@@ -185,6 +186,22 @@ $('panUp').onclick=()=>panAxis('y',-1);$('panDown').onclick=()=>panAxis('y',1);
 $('centerDiagonal').onclick=()=>{if(loading||x.chr!==y.chr)return;const span=y.end-y.start,center=(x.start+x.end)/2;y=clampRegion({...y,start:center-span/2,end:center+span/2},sequenceLength(sequences[y.chr]));navigate();};
 function setInteractionMode(mode){drag=null;interactionMode=mode;canvas.style.cursor=mode==='pan'?'grab':'crosshair';for(const id of ['boxMode','panMode'])$(id).setAttribute('aria-pressed',String(id===(mode==='pan'?'panMode':'boxMode')));$('navigationHint').textContent=mode==='pan'?'Drag to pan · Scroll to zoom · Choose Box zoom to select a region':'Drag a box to zoom · Scroll to zoom · Shift + drag to pan';drawOverlay();}
 $('boxMode').onclick=()=>setInteractionMode('box');$('panMode').onclick=()=>setInteractionMode('pan');
+$('pairInfo').onclick = () => {
+  const help = $('pairHelp');
+  help.hidden = !help.hidden;
+  $('pairInfo').setAttribute('aria-expanded', String(!help.hidden));
+};
+$('maxPairs').onchange = () => {
+  const field = $('maxPairs');
+  const limit = Number(field.value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 2000000) {
+    toast('Enter a whole number from 1 to 2,000,000.');
+    field.value = maxPairs;
+    return;
+  }
+  maxPairs = limit;
+  navigate();
+};
 $('computeCutoff').onchange=()=>{
   const mb=Number($('computeCutoff').value),bases=mb*1e6;
   if(!Number.isFinite(mb)||mb<=0||!Number.isSafeInteger(bases)){toast('Enter a positive cutoff in Mb (whole base pairs).');$('computeCutoff').value=dotplotCutoff/1e6;return;}

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 184 60" width="184" height="60" role="img" aria-label="Locus">
+  <rect width="184" height="60" rx="10" fill="#f5f7f2"/>
+  <rect x="8" y="8" width="44" height="44" rx="11" fill="#187f78"/>
+  <g fill="white"><circle cx="19" cy="40" r="2.8"/><circle cx="30" cy="29" r="2.8"/><circle cx="41" cy="18" r="2.8"/></g>
+  <text x="61" y="42" font-family="Arial,sans-serif" font-size="39" font-weight="700" fill="#173932">locus<tspan fill="#187f78">.</tspan></text>
+</svg>

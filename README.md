@@ -1,6 +1,12 @@
+![Locus logo](docs/images/locus-logo.svg)
+
 # Locus: genomic dotplot workbench
 
-A browser prototype combining word-match dotplots, independent or linked genomic navigation, and feature tracks aligned to both axes. Sequence files stay local: the browser builds a sparse byte index and reads selected regions on demand. Tracks stay in browser memory; no upload API is used.
+Locus compares DNA sequences in an interactive dotplot. Zoom into a region to explore duplications, inverted repeats, and their relationships to genes, transposable elements, or signal tracks. FASTA and annotation files stay in your browser.
+
+![Synthetic chromosome compared with itself, with feature tracks on both axes and forward and reverse matches in different colors](docs/images/locus-demo.jpg)
+
+In the synthetic example above, the long diagonal shows the chromosome matching itself. Shorter diagonals away from it reveal sequence shared between different positions.
 
 ## Download and run locally
 
@@ -22,7 +28,7 @@ With Node 18+: `node --test tests/*.test.mjs`. Run the launcher integration test
 - Adaptive exact k-mer length (9–101 bp), independent minimizer density, configurable repeat exclusion, seven forward/reverse color choices and 0.5–4 px stroke/dot sizes. Appearance changes update the canvas, legend and PNG export without recomputing matches.
 - BED3–12, GFF3, GTF and bedGraph import. BED12 exon blocks and GFF3 transcript blocks; GTF without transcript rows is displayed as individual exon features. Arrows preserve explicit +/- strand. Quantitative tracks preserve negative values and use per-track viewport scales; hover gives raw values.
 - Matching runs in a Web Worker. Only visible sequence regions are sent to the worker. A new navigation cancels stale computation; eight recent results are cached. Rolling hash candidates are checked against sequence text before output.
-- Bounds: no fixed plain FASTA file-size cap; matches wait until both axis spans are within the user-selected cutoff (default 5 Mb). Values above 10 Mb show a CPU/memory warning. Large files require a full initial scan and may load slowly. Other bounds: 10 MiB per track, 12 tracks, 200,000 seeds per axis, 240,000 verified pairs. Repetitive seeds above the configured occurrence threshold are omitted. The seed cap stops computation with an explicit message rather than risking unbounded memory. The pair cap gives an explicitly truncated plot.
+- Bounds: no fixed plain FASTA file-size cap; matches wait until both axis spans are within the user-selected cutoff (default 5 Mb). Values above 10 Mb show a CPU/memory warning. Large files require a full initial scan and may load slowly. Other bounds: 10 MiB per track, 12 tracks, 200,000 seeds per axis, 240,000 displayed pairs by default (adjustable up to 2,000,000). Repetitive seeds above the configured occurrence threshold are omitted. The seed cap stops computation with an explicit message rather than risking unbounded memory. Above the selected pair limit, a reproducible sample represents matches across the full region.
 
 ## Important limits
 
@@ -45,3 +51,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a resource-aware whole-genome impleme
 Seventeen JavaScript checks cover brute-force exact-match parity for k=3–101, sampled reverse matches, repeat and pair limits, ambiguous bases, FASTA validation, BED12 blocks, GFF/GTF coordinate conversion and strand, negative bedGraph values, viewport clamping, source-coordinate projection, interval boundaries and BED4 strand shorthand, chunk-indexed regional FASTA reads above the former file-size cap, independent panning, box zoom, style-only redraws, and configurable cutoff/warning behavior. App interaction checks use DOM and worker stubs. Three Python integration tests verify the local server and extracted release. Browser QA checks linked locus entry, adaptive k reduction, independent inversion comparison, file import, and responsive controls.
 
 Observed local CPU examples (single run; synthetic data, not performance guarantees): 50 kb / k21: 140 ms; 600 kb / k41: 275 ms; 3 Mb / k71 built from five repeats of the example: 360 ms, reaching the 240,000-pair cap. Worker startup, sequence transfer, parsing and painting are excluded. Benchmark representative real genomes and repeat content before choosing a production engine.
+
+## Contributors
+
+OpenAI Codex contributed the full-region match sampling fix, adjustable match-pair limit, and regression tests for v0.2.1.
